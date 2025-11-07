@@ -6,6 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -16,7 +17,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      # 1) 自动找到仓库根目录里的 ZIP（任选其一）
+      # 1) 自动找到根目录里的 ZIP
       - name: Detect ZIP file
         id: detect
         run: |
@@ -29,13 +30,13 @@ jobs:
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
           echo "✅ Found: $ZIP_FILE"
 
-      # 2) 解压 ZIP
+      # 2) 解压
       - name: Unzip project
         run: unzip -o "$ZIP_FILE" -d .
         env:
           ZIP_FILE: ${{ env.ZIP_FILE }}
 
-      # 3) 自动识别工程目录（包含 settings.gradle 的目录）
+      # 3) 定位工程目录（含 settings.gradle）
       - name: Detect project dir
         run: |
           set -e
@@ -49,8 +50,8 @@ jobs:
           echo "PROJ_DIR=$PROJ_DIR" >> "$GITHUB_ENV"
           echo "✅ Project dir: $PROJ_DIR"
 
-      # 4) 规范化 settings.gradle：声明插件仓库 + 插件版本（关键修复）
-      - name: Patch settings.gradle (pluginManagement + versions)
+      # 4) 规范化 settings.gradle：声明插件版本 + 仓库（关键）
+      - name: Patch settings.gradle (pluginManagement + repos)
         run: |
           cat > "$PROJ_DIR/settings.gradle" <<'EOF'
           pluginManagement {
@@ -77,53 +78,87 @@ jobs:
         env:
           PROJ_DIR: ${{ env.PROJ_DIR }}
 
-      # 5) 规范化根 build.gradle：用 plugins DSL + apply false，避免旧写法冲突
-      - name: Patch root build.gradle (plugins DSL)
+      # 5) ✅ 根 build.gradle 只保留 plugins（不要 allprojects/repositories）
+      - name: Patch root build.gradle (plugins only)
         run: |
           cat > "$PROJ_DIR/build.gradle" <<'EOF'
           plugins {
               id "com.android.application" version "8.5.2" apply false
               id "org.jetbrains.kotlin.android" version "1.9.24" apply false
           }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
+          // NOTE: Do NOT declare project-level repositories here,
+          // because settings.gradle uses repositoriesMode = FAIL_ON_PROJECT_REPOS.
           EOF
         env:
           PROJ_DIR: ${{ env.PROJ_DIR }}
 
-      # 6) 安装 JDK/SDK
-      - name: Set up JDK 17
+      # 6) 查看关键文件，便于确认修改已生效
+      - name: Show patched files
+        run: |
+          echo "--- settings.gradle ---"
+          sed -n '1,200p' "$PROJ_DIR/settings.gradle" || true
+          echo "--- root build.gradle ---"
+          sed -n '1,120p' "$PROJ_DIR/build.gradle" || true
+          echo "--- app/build.gradle ---"
+          sed -n '1,200p' "$PROJ_DIR/app/build.gradle" || true
+        env:
+          PROJ_DIR: ${{ env.PROJ_DIR }}
+
+      # 7) JDK 与 Gradle 缓存
+      - name: Set up JDK 17 (with Gradle cache)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/settings.gradle') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # 8) Android SDK（带缓存）
       - name: Install Android SDK cmdline-tools
         uses: android-actions/setup-android@v3
+
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            $ANDROID_HOME/platforms
+            $ANDROID_HOME/build-tools
+            $ANDROID_HOME/platform-tools
+          key: ${{ runner.os }}-androidsdk-34-3400
+          restore-keys: |
+            ${{ runner.os }}-androidsdk-
 
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses
 
-      - name: Install required SDK packages
+      - name: Ensure required SDK packages
         run: |
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
 
-      # 7) 构建 APK（Gradle 8.7）
+      # 9) 构建 APK
       - name: Build Debug APK
         working-directory: ${{ env.PROJ_DIR }}
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx2g -Dorg.gradle.parallel=true"
         run: |
           curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o gradle.zip
           unzip -q gradle.zip
-          ./gradle-8.7/bin/gradle :app:assembleDebug --no-daemon --stacktrace --info
+          ./gradle-8.7/bin/gradle :app:assembleDebug --stacktrace --info --no-daemon --parallel --build-cache
 
-      # 8) 上传 APK
+      # 10) 上传 APK
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk
           path: ${{ env.PROJ_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
