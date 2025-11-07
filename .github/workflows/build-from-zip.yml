@@ -27,12 +27,13 @@ jobs:
             exit 1
           fi
           echo "✅ Found ZIP: $ZIP_FILE"
-          echo "ZIP_FILE=$ZIP_FILE" >> $GITHUB_ENV
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
       # 2) 解压
       - name: Unzip project
         run: unzip -o "$ZIP_FILE" -d .
-        env: { ZIP_FILE: ${{ env.ZIP_FILE }} }
+        env:
+          ZIP_FILE: ${{ env.ZIP_FILE }}
 
       # 3) 自动识别项目目录（含 settings.gradle 的目录）
       - name: Detect project dir
@@ -46,9 +47,9 @@ jobs:
           fi
           PROJ_DIR=$(dirname "$PROJ_DIR")
           echo "✅ Project dir: $PROJ_DIR"
-          echo "PROJ_DIR=$PROJ_DIR" >> $GITHUB_ENV
+          echo "PROJ_DIR=$PROJ_DIR" >> "$GITHUB_ENV"
 
-      # 4) 🔧 补丁：把根 build.gradle 改为 plugins DSL（避免 “dependencies() on null object”）
+      # 4) 补丁：把根 build.gradle 改为 plugins DSL（防止 dependencies() on null object）
       - name: Patch root build.gradle (plugins DSL)
         run: |
           cat > "${PROJ_DIR}/build.gradle" <<'EOF'
@@ -83,7 +84,7 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # 6) 用 Gradle 8.7 构建 APK
+      # 6) 构建 APK（Gradle 8.7）
       - name: Build Debug APK
         working-directory: ${{ env.PROJ_DIR }}
         run: |
