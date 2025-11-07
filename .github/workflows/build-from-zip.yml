@@ -49,21 +49,26 @@ jobs:
           echo "✅ Project dir: $PROJ_DIR"
           echo "PROJ_DIR=$PROJ_DIR" >> "$GITHUB_ENV"
 
-      # 4) 补丁：把根 build.gradle 改为 plugins DSL（防止 dependencies() on null object）
-      - name: Patch root build.gradle (plugins DSL)
+      # 4) ✅ 最小化根 build.gradle，避免解析冲突
+      - name: Patch root build.gradle (minimal)
         run: |
           cat > "${PROJ_DIR}/build.gradle" <<'EOF'
-          plugins {
-            id 'com.android.application' version '8.5.2' apply false
-            id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
-          }
-          allprojects {
-            repositories {
-              google()
-              mavenCentral()
-            }
-          }
-          EOF
+// Minimal root build script for CI.
+// Repositories are defined in settings.gradle (dependencyResolutionManagement).
+// Actual plugins & dependencies are declared in module build.gradle files.
+EOF
+        env:
+          PROJ_DIR: ${{ env.PROJ_DIR }}
+
+      # （可选）打印关键文件，便于故障排查
+      - name: Show key files
+        run: |
+          echo "--- settings.gradle ---"
+          sed -n '1,120p' "${PROJ_DIR}/settings.gradle" || true
+          echo "--- root build.gradle ---"
+          sed -n '1,120p' "${PROJ_DIR}/build.gradle" || true
+          echo "--- app/build.gradle ---"
+          sed -n '1,160p' "${PROJ_DIR}/app/build.gradle" || true
         env:
           PROJ_DIR: ${{ env.PROJ_DIR }}
 
@@ -99,3 +104,4 @@ jobs:
           name: app-debug.apk
           path: ${{ env.PROJ_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
